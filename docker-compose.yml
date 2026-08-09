@@ -1,0 +1,30 @@
+services:
+
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: ${DOCKERHUB_USERNAME}/healthcare-frontend:${IMAGE_TAG:-latest}
+    container_name: healthcare-frontend
+    ports:
+      - "80:80"
+    restart: always
+    depends_on:
+      - backend
+      - database
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    image: ${DOCKERHUB_USERNAME}/healthcare-backend:${IMAGE_TAG:-latest}
+    container_name: healthcare-backend
+    restart: always
+
+  database:
+    build:
+      context: ./database
+      dockerfile: Dockerfile
+    image: ${DOCKERHUB_USERNAME}/healthcare-database:${IMAGE_TAG:-latest}
+    container_name: healthcare-database
+    restart: always

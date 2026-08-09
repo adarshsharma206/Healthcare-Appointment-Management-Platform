@@ -1,0 +1,122 @@
+pipeline {
+
+    agent any
+
+    environment {
+        DOCKERHUB_CREDENTIALS = credentials('dockerhub-credentials')
+        DOCKERHUB_USERNAME = "${DOCKERHUB_CREDENTIALS_USR}"
+
+        FRONTEND_IMAGE = "${DOCKERHUB_USERNAME}/healthcare-frontend"
+        BACKEND_IMAGE  = "${DOCKERHUB_USERNAME}/healthcare-backend"
+        DATABASE_IMAGE = "${DOCKERHUB_USERNAME}/healthcare-database"
+
+        IMAGE_TAG = "${BUILD_NUMBER}"
+
+        APP_SERVER = "10.0.1.250"
+    }
+
+    stages {
+
+        stage('Checkout') {
+            steps {
+                echo 'Checking out latest source code from GitHub...'
+                checkout scm
+            }
+        }
+
+        stage('Build Docker Images') {
+            steps {
+                echo "Building images with tag ${IMAGE_TAG}..."
+
+                sh """
+                    docker build \
+                      -t ${FRONTEND_IMAGE}:${IMAGE_TAG} \
+                      .
+
+                    docker build \
+                      -t ${BACKEND_IMAGE}:${IMAGE_TAG} \
+                      ./backend
+
+                    docker build \
+                      -t ${DATABASE_IMAGE}:${IMAGE_TAG} \
+                      ./database
+                """
+            }
+        }
+
+        stage('Docker Login') {
+            steps {
+                sh '''
+                    echo "$DOCKERHUB_CREDENTIALS_PSW" | \
+                    docker login \
+                    -u "$DOCKERHUB_CREDENTIALS_USR" \
+                    --password-stdin
+                '''
+            }
+        }
+
+        stage('Push Images') {
+            steps {
+                sh """
+                    docker push ${FRONTEND_IMAGE}:${IMAGE_TAG}
+                    docker push ${BACKEND_IMAGE}:${IMAGE_TAG}
+                    docker push ${DATABASE_IMAGE}:${IMAGE_TAG}
+                """
+            }
+        }
+
+        stage('Deploy Application') {
+            steps {
+                sshagent(credentials: ['application-server-ssh']) {
+
+                    sh """
+                        ssh -o StrictHostKeyChecking=no \
+                            ubuntu@${APP_SERVER} '
+                                mkdir -p ~/healthcare-app &&
+                                cd ~/healthcare-app &&
+                                rm -f docker-compose.yml &&
+                                curl -fsSL \
+                                https://raw.githubusercontent.com/ritiiks99/Healthcare-Appointment-Management-Platform/main/docker-compose.yml \
+                                -o docker-compose.yml &&
+                                export DOCKERHUB_USERNAME=${DOCKERHUB_USERNAME} &&
+                                export IMAGE_TAG=${IMAGE_TAG} &&
+                                docker login -u ${DOCKERHUB_CREDENTIALS_USR} -p ${DOCKERHUB_CREDENTIALS_PSW} &&
+                                docker compose pull &&
+                                docker compose up -d --remove-orphans
+                            '
+                    """
+                }
+            }
+        }
+
+        stage('Verify Deployment') {
+            steps {
+                sshagent(credentials: ['application-server-ssh']) {
+
+                    sh """
+                        ssh -o StrictHostKeyChecking=no \
+                            ubuntu@${APP_SERVER} '
+                                docker ps &&
+                                docker compose -f ~/healthcare-app/docker-compose.yml ps
+                            '
+                    """
+                }
+            }
+        }
+    }
+
+    post {
+        success {
+            echo "Healthcare application deployed successfully."
+            echo "Build Number: ${BUILD_NUMBER}"
+        }
+
+        failure {
+            echo "Healthcare application deployment failed."
+        }
+
+        always {
+            sh 'docker logout || true'
+        }
+    }
+}
